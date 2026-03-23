@@ -1,7 +1,21 @@
 const Vec3 = require('vec3')
 
+function tellrawMineflayer(bot, message) {
+  // Keep the tag styling centralized so all status lines look identical.
+  const payload = {
+    text: '',
+    extra: [
+      { text: '<mineflayer> ', color: 'dark_gray' },
+      { text: String(message), color: 'white' }
+    ]
+  }
+
+  // Route tagged output through tellraw to target the configured player.
+  bot.chat(`/tellraw GoldenApple6 ${JSON.stringify(payload)}`)
+}
+
 function globalChat(bot, message) {
-  bot.chat(`<mineflayer> ${message}`)
+  tellrawMineflayer(bot, message)
 }
 
 function lookDirection(bot, yaw, pitch = 0) {
@@ -52,7 +66,7 @@ function getClosestNonBotPlayerEntity(bot, botNames) {
 function lookAtWherePlayerLooks(bot, botNames) {
   const targetPlayerEntity = getClosestNonBotPlayerEntity(bot, botNames)
   if (!targetPlayerEntity) {
-    bot.chat('<mineflayer> No player found to copy look direction')
+    tellrawMineflayer(bot, 'No player found to copy look direction')
     return
   }
 
@@ -63,6 +77,7 @@ function lookAtWherePlayerLooks(bot, botNames) {
 
 module.exports = {
   Vec3,
+  tellrawMineflayer,
   globalChat,
   lookDirection,
   lookCardinal,

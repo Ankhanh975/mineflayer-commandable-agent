@@ -32,7 +32,8 @@ function createCommandBot(name, botNames = []) {
     looking: false,
     following: false,
     guarding: false,
-    spinning: false
+    spinning: false,
+    startedAt: Date.now()
   }
 
   // Event handlers

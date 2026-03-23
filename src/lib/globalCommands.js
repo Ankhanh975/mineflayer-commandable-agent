@@ -75,7 +75,7 @@ function handleGlobalCommand(command, args, bot, context) {
       globalChat(bot, '<name> look/lookat/turn/north/south/east/west/up/down')
       globalChat(bot, '<name> locklook/unlocklook')
       globalChat(bot, '<name> follow/guard/spin/dance')
-      globalChat(bot, '<name> status/health/say <msg>')
+      globalChat(bot, '<name> info/status/report/health/say <msg>')
       globalChat(bot, '=== Global Commands ===')
       globalChat(bot, 'list - Show all bots')
       globalChat(bot, 'spawn [name] - Spawn new bot (auto-name if omitted)')

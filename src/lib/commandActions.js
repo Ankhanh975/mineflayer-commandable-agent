@@ -89,6 +89,93 @@ function startDigLoop(bot) {
   void digNext()
 }
 
+function formatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(totalSeconds / 3600)
+  const m = Math.floor((totalSeconds % 3600) / 60)
+  const s = totalSeconds % 60
+  return `${h}h ${m}m ${s}s`
+}
+
+function sendBotReport(bot) {
+  const pos = bot.entity?.position
+  const now = Date.now()
+  const startedAt = bot.state?.startedAt || now
+  const uptime = formatDuration(now - startedAt)
+
+  const x = pos ? pos.x.toFixed(2) : 'N/A'
+  const y = pos ? pos.y.toFixed(2) : 'N/A'
+  const z = pos ? pos.z.toFixed(2) : 'N/A'
+
+  const health = bot.health ?? 'N/A'
+  const food = bot.food ?? 'N/A'
+
+  const dimension = bot.game?.dimension ?? 'N/A'
+  const ping = bot.player?.ping ?? 'N/A'
+  const inventoryItems = bot.inventory.items()
+  const inventorySummary = inventoryItems.length > 0
+    ? inventoryItems.map(item => `${item.name} x${item.count}`).join(', ')
+    : 'empty'
+
+  const state = bot.state || {}
+  const activeStates = [
+    state.moving ? 'moving' : null,
+    state.sprinting ? 'sprinting' : null,
+    state.sneaking ? 'sneaking' : null,
+    state.looking ? 'looking' : null,
+    state.following ? 'following' : null,
+    state.guarding ? 'guarding' : null,
+    state.spinning ? 'spinning' : null,
+    state.attacking ? 'attacking' : null,
+    state.digging ? 'digging' : null,
+    state.lookLocked ? 'lookLocked' : null
+  ].filter(Boolean)
+  const stateSummary = activeStates.length > 0 ? activeStates.join(', ') : 'none'
+
+  const tellraw = (components) => {
+    bot.chat(`/tellraw GoldenApple6 ${JSON.stringify({ text: '', extra: components })}`)
+  }
+
+  tellraw([
+    { text: '[mineflayer] ', color: 'dark_gray' },
+    { text: 'Report for ', color: 'gold' },
+    { text: bot.username, color: 'yellow' }
+  ])
+
+  if (stateSummary !== 'none') {
+    tellraw([
+      { text: 'State: ', color: 'aqua' },
+      { text: stateSummary, color: 'white' }
+    ])
+  }
+
+  tellraw([
+    { text: 'Inventory: ', color: 'light_purple' },
+    { text: inventorySummary, color: 'white' }
+  ])
+
+  tellraw([
+    { text: 'HP: ', color: 'red' },
+    { text: String(health), color: 'white' },
+    { text: '  Hunger: ', color: 'gold' },
+    { text: String(food), color: 'white' }
+  ])
+
+  tellraw([
+    { text: 'Coords: ', color: 'green' },
+    { text: `${x}, ${y}, ${z}`, color: 'white' }
+  ])
+
+  tellraw([
+    { text: 'Uptime: ', color: 'blue' },
+    { text: uptime, color: 'white' },
+    { text: '  Dim: ', color: 'dark_aqua' },
+    { text: String(dimension), color: 'white' },
+    { text: '  Ping: ', color: 'gray' },
+    { text: String(ping), color: 'white' }
+  ])
+}
+
 function executeCommand(bot, action, args, context) {
   const { getCurrentBotNames, getManager } = context
 
@@ -354,9 +441,9 @@ function executeCommand(bot, action, args, context) {
     }
 
     case 'status':
-      bot.chat(
-        `Status: moving=${bot.state.moving}, sprinting=${bot.state.sprinting}, sneaking=${bot.state.sneaking}, looking=${bot.state.looking}`
-      )
+    case 'info':
+    case 'report':
+      sendBotReport(bot)
       break
     case 'health':
       bot.chat(`Health: ${bot.health}/${bot.maxHealth}`)
