@@ -1,0 +1,200 @@
+# Mineflayer Chat Command Bots
+
+A Mineflayer module that creates controllable bots with Carpet-style chat commands.
+
+## Features
+
+- Create single or multiple bots with chat command support
+- **Bots spawn idle** - No automatic behaviors, requires explicit commands
+- Control bot movement, jumping, sneaking, and sprinting
+- Optional auto-look functionality
+- Block interaction (place, dig)
+- Item management (drop, use)
+- Attack functionality
+- Full state tracking for each bot
+- **Dynamic spawn/despawn** - Create and remove bots during runtime
+- **Global admin commands** - List, spawn, and despawn bots
+
+## Installation
+
+```bash
+npm install mineflayer vec3
+```
+
+## Usage
+
+### Basic Setup with 10 Bots
+
+Create a new file (e.g., `start.js`):
+
+```javascript
+const { createBots } = require('./src/bots')
+
+const botNames = ['Bot1', 'Bot2', 'Bot3', 'Bot4', 'Bot5', 'Bot6', 'Bot7', 'Bot8', 'Bot9', 'Bot10']
+const bots = createBots(botNames)
+```
+
+### Create a Single Bot
+
+```javascript
+const { createCommandBot } = require('./src/bots')
+
+const bot = createCommandBot('MyBot')
+```
+
+## Chat Commands
+
+All commands use the format: `<botname> <action> [args]`
+
+### Movement
+
+- `Alex move` - Move forward
+- `Alex stop` - Stop all movement
+- `Steve forward` - Move forward
+- `Emma back` - Move backward
+- `James left` - Strafe left
+- `Olivia right` - Strafe right
+
+### Actions
+
+- `Liam jump` - Jump
+- `Ava sprint` - Start sprinting
+- `Noah walk` - Walk normally (stop sprinting)
+- `Sophia sneak` - Start sneaking
+- `Mason unsneak` - Stop sneaking
+
+### Interactions
+
+- `Alex use` - Use/activate (right-click)
+- `Steve attack` - Attack target entity
+- `Emma place` - Place block
+- `James dig` - Dig block
+- `Olivia drop` - Drop held item
+
+### Looking
+
+- `Liam look` - Toggle auto-look at player
+- `Ava look <x> <y> <z>` - Look at specific coordinates
+- `Ava look west` - Look to a cardinal direction (`north/south/east/west`)
+- `Ava up` / `Ava down` - Look straight up or down
+- `Ava lookat` - Look where the nearest player is looking
+- `Ava lookat <x> <y> <z>` - Look at exact coordinates
+- `Ava lookat east` - Directional `lookat` shortcut
+
+### Behaviors
+
+- `Noah follow` - Follow the player
+- `Sophia guard` - Stand still and look around
+- `Mason spin` - Rotate in a circle
+- `Alex dance` - Dance sequence
+
+### Example
+
+In Minecraft chat:
+```
+Alex move
+Steve jump
+Emma sprint
+James follow
+Olivia dance
+Liam stop
+Ava lookat
+Noah west
+```
+
+## Global Commands
+
+These commands work for managing the bot network:
+
+- `list` - Display all online bots
+- `spawn [name]` - Create a new bot (auto-generates name if omitted)
+- `despawn <name>` - Remove a bot from the server
+- `help` - Show command help
+
+### Example
+
+```
+list
+spawn
+spawn David
+despawn Emma
+help
+```
+
+## API
+
+### `createCommandBot(name)`
+
+Creates a single bot with chat command handling.
+
+**Parameters:**
+- `name` (string) - Bot username
+
+**Returns:** Mineflayer bot instance with command handlers
+
+**Example:**
+```javascript
+const { createCommandBot } = require('./src/bots')
+const bot = createCommandBot('TestBot')
+```
+
+### `createBots(botNames)`
+
+Creates multiple bots with chat command handling.
+
+**Parameters:**
+- `botNames` (string[]) - Array of bot usernames
+
+**Returns:** Array of Mineflayer bot instances
+
+**Example:**
+```javascript
+const { createBots } = require('./src/bots')
+const bots = createBots(['Alex', 'Steve', 'Emma', 'James', 'Olivia'])
+```
+
+## Bot State
+
+Each bot has a `state` object tracking:
+- `moving` (boolean) - Currently moving forward
+- `sprinting` (boolean) - Currently sprinting
+- `sneaking` (boolean) - Currently sneaking
+- `looking` (boolean) - Auto-look enabled/disabled
+- `following` (boolean) - Following player enabled/disabled
+- `guarding` (boolean) - Guard mode enabled/disabled
+- `spinning` (boolean) - Spinning animation active
+
+Access via `bot.state.looking`, etc.
+
+## Features
+
+- **Idle startup**: Bots spawn idle and don't perform actions until commanded
+- **Auto-look (optional)**: Enable `<botname> look` to make bots track player position
+- **Message relay**: Messages not starting with a bot name are relayed by all bots
+- **Error handling**: Kicked/error events are logged to console
+- **State persistence**: Each bot tracks its own movement and action states
+
+## Configuration
+
+To customize connection settings, modify the src/bots.js file:
+
+```javascript
+const bot = mineflayer.createBot({
+  host: 'localhost',        // Server IP
+  port: 25565,             // Server port
+  username: name,
+  auth: 'offline',         // or 'microsoft' for online mode
+  version: '1.20.1'        // Minecraft version
+})
+```
+
+## Requirements
+
+- Node.js
+- Mineflayer
+- vec3
+- A Minecraft server
+
+## License
+
+MIT
