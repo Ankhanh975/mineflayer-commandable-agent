@@ -3,9 +3,27 @@
  * Keeps public API stable while delegating to focused modules.
  */
 
-const { setManager, getManager, setBotCreator, getBotCreator } = require('./commandState')
 const { handleGlobalCommand } = require('./globalCommands')
 const { executeCommand: executeAction, initializePhysicsTick: initPhysics } = require('./commandActions')
+
+let globalManager = null
+let botCreator = null
+
+function setManager(manager) {
+  globalManager = manager
+}
+
+function getManager() {
+  return globalManager
+}
+
+function setBotCreator(creator) {
+  botCreator = creator
+}
+
+function getBotCreator() {
+  return botCreator
+}
 
 const GLOBAL_COMMANDS = new Set(['spawn', 'despawn', 'list', 'help'])
 

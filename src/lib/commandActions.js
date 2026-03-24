@@ -4,91 +4,10 @@ const {
   lookAtWherePlayerLooks,
   getClosestNonBotPlayerEntity
 } = require('./commandHelpers')
+const { stopAttackLoop, startAttackLoop } = require('./attackLoop')
+const { stopDigLoop, startDigLoop } = require('./digLoop')
+const { executeFarmAction } = require('./farmActions')
 const { sendBotReport } = require('./sendBotReport')
-
-function getForwardAttackTarget(bot, getManager) {
-  const target = bot.entityAtCursor(5)
-  if (!target) return null
-
-  if (target.type === 'object' || target.type === 'orb' || target.type === 'global') return null
-
-  const manager = getManager()
-  if (target.type === 'player' && manager && manager.hasBot(target.username)) return null
-  if (target === bot.entity) return null
-  return target
-}
-
-function stopAttackLoop(bot) {
-  if (bot.attackInterval) {
-    clearInterval(bot.attackInterval)
-    bot.attackInterval = null
-  }
-  if (bot.state) {
-    bot.state.attacking = false
-  }
-}
-
-function startAttackLoop(bot, getManager, cps = 5) {
-  stopAttackLoop(bot)
-  const intervalMs = Math.max(1, Math.floor(1000 / cps))
-
-  bot.state.attacking = true
-  bot.attackInterval = setInterval(() => {
-    const target = getForwardAttackTarget(bot, getManager)
-    if (!target) {
-      if (typeof bot.swingArm === 'function') {
-        try {
-          bot.swingArm('right')
-        } catch {
-          // Ignore swing errors while idle attacking.
-        }
-      }
-      return
-    }
-
-    try {
-      const result = bot.attack(target)
-      if (result && typeof result.catch === 'function') {
-        result.catch(() => {})
-      }
-    } catch {
-      // Ignore transient attack errors during combat ticks.
-    }
-  }, intervalMs)
-}
-
-function stopDigLoop(bot) {
-  if (bot.digLoopTimer) {
-    clearTimeout(bot.digLoopTimer)
-    bot.digLoopTimer = null
-  }
-  bot.state.digging = false
-}
-
-function startDigLoop(bot) {
-  stopDigLoop(bot)
-  bot.state.digging = true
-
-  const digNext = async () => {
-    if (!bot.state.digging) return
-
-    const targetBlock = bot.blockAtCursor(5)
-    if (!targetBlock || !bot.canDigBlock(targetBlock) || bot.targetDigBlock) {
-      bot.digLoopTimer = setTimeout(digNext, 100)
-      return
-    }
-
-    try {
-      await bot.dig(targetBlock, false)
-    } catch {
-      // Ignore transient dig failures and retry next tick.
-    }
-
-    bot.digLoopTimer = setTimeout(digNext, 60)
-  }
-
-  void digNext()
-}
 
 function isEdibleItem(bot, item) {
   if (!item) return false
@@ -276,7 +195,7 @@ function executeCommand(bot, action, args, context) {
 
     case 'attack':
       startAttackLoop(bot, getManager, 5)
-      bot.chat('<mineflayer> Continuous attack enabled (5 CPS)')
+      bot.chat('Started attacking')
       break
     case 'attacknearest': {
       const entities = Object.values(bot.entities)
@@ -310,8 +229,12 @@ function executeCommand(bot, action, args, context) {
     case 'dig':
     case 'mine':
       startDigLoop(bot)
-      bot.chat('<mineflayer> Continuous dig enabled')
+      bot.chat('Started digging')
       break
+    case 'farm': {
+      void executeFarmAction(bot)
+      break
+    }
     case 'activateitem':
       bot.activate()
       break

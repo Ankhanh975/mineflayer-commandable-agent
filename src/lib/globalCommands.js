@@ -71,7 +71,7 @@ function handleGlobalCommand(command, args, bot, context) {
     case 'help': {
       globalChat(bot, '=== Bot Commands ===')
       globalChat(bot, '<name> move/stop/jump/sprint/walk/sneak/unsneak')
-      globalChat(bot, '<name> attack/use/dig/place/drop/dropall')
+      globalChat(bot, '<name> attack/use/dig/farm/place/drop/dropall')
       globalChat(bot, '<name> look/lookat/turn/north/south/east/west/up/down')
       globalChat(bot, '<name> locklook/unlocklook')
       globalChat(bot, '<name> follow/guard/spin/dance')
