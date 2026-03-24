@@ -4,6 +4,7 @@ const {
   lookAtWherePlayerLooks,
   getClosestNonBotPlayerEntity
 } = require('./commandHelpers')
+const { sendBotReport } = require('./sendBotReport')
 
 function getForwardAttackTarget(bot, getManager) {
   const target = bot.entityAtCursor(5)
@@ -89,91 +90,48 @@ function startDigLoop(bot) {
   void digNext()
 }
 
-function formatDuration(ms) {
-  const totalSeconds = Math.max(0, Math.floor(ms / 1000))
-  const h = Math.floor(totalSeconds / 3600)
-  const m = Math.floor((totalSeconds % 3600) / 60)
-  const s = totalSeconds % 60
-  return `${h}h ${m}m ${s}s`
+function isEdibleItem(bot, item) {
+  if (!item) return false
+  if (typeof item.foodPoints === 'number' && item.foodPoints > 0) return true
+
+  const foods = bot.registry?.foodsArray
+  if (!Array.isArray(foods)) return false
+
+  return foods.some(food => food.id === item.type || food.name === item.name)
 }
 
-function sendBotReport(bot) {
-  const pos = bot.entity?.position
-  const now = Date.now()
-  const startedAt = bot.state?.startedAt || now
-  const uptime = formatDuration(now - startedAt)
+function findFirstEdibleItem(bot) {
+  return bot.inventory.items().find(item => isEdibleItem(bot, item)) || null
+}
 
-  const x = pos ? pos.x.toFixed(2) : 'N/A'
-  const y = pos ? pos.y.toFixed(2) : 'N/A'
-  const z = pos ? pos.z.toFixed(2) : 'N/A'
+function findNearestBed(bot, maxDistance = 15, maxYDelta = 3) {
+  const positions = bot.findBlocks({
+    matching: (block) => {
+      return Boolean(block && typeof block.name === 'string' && block.name.endsWith('_bed'))
+    },
+    maxDistance,
+    count: 64
+  })
 
-  const health = bot.health ?? 'N/A'
-  const food = bot.food ?? 'N/A'
+  const botPos = bot.entity?.position
+  if (!botPos || !Array.isArray(positions) || positions.length === 0) return null
 
-  const dimension = bot.game?.dimension ?? 'N/A'
-  const ping = bot.player?.ping ?? 'N/A'
-  const inventoryItems = bot.inventory.items()
-  const inventorySummary = inventoryItems.length > 0
-    ? inventoryItems.map(item => `${item.name} x${item.count}`).join(', ')
-    : 'empty'
+  let nearestBed = null
+  let nearestDistance = Infinity
 
-  const state = bot.state || {}
-  const activeStates = [
-    state.moving ? 'moving' : null,
-    state.sprinting ? 'sprinting' : null,
-    state.sneaking ? 'sneaking' : null,
-    state.looking ? 'looking' : null,
-    state.following ? 'following' : null,
-    state.guarding ? 'guarding' : null,
-    state.spinning ? 'spinning' : null,
-    state.attacking ? 'attacking' : null,
-    state.digging ? 'digging' : null,
-    state.lookLocked ? 'lookLocked' : null
-  ].filter(Boolean)
-  const stateSummary = activeStates.length > 0 ? activeStates.join(', ') : 'none'
+  for (const pos of positions) {
+    if (Math.abs(pos.y - botPos.y) > maxYDelta) continue
+    const block = bot.blockAt(pos)
+    if (!block) continue
 
-  const tellraw = (components) => {
-    bot.chat(`/tellraw GoldenApple6 ${JSON.stringify({ text: '', extra: components })}`)
+    const distance = block.position.distanceTo(botPos)
+    if (distance < nearestDistance) {
+      nearestDistance = distance
+      nearestBed = block
+    }
   }
 
-  tellraw([
-    { text: '[mineflayer] ', color: 'dark_gray' },
-    { text: 'Report for ', color: 'gold' },
-    { text: bot.username, color: 'yellow' }
-  ])
-
-  if (stateSummary !== 'none') {
-    tellraw([
-      { text: 'State: ', color: 'aqua' },
-      { text: stateSummary, color: 'white' }
-    ])
-  }
-
-  tellraw([
-    { text: 'Inventory: ', color: 'light_purple' },
-    { text: inventorySummary, color: 'white' }
-  ])
-
-  tellraw([
-    { text: 'HP: ', color: 'red' },
-    { text: String(health), color: 'white' },
-    { text: '  Hunger: ', color: 'gold' },
-    { text: String(food), color: 'white' }
-  ])
-
-  tellraw([
-    { text: 'Coords: ', color: 'green' },
-    { text: `${x}, ${y}, ${z}`, color: 'white' }
-  ])
-
-  tellraw([
-    { text: 'Uptime: ', color: 'blue' },
-    { text: uptime, color: 'white' },
-    { text: '  Dim: ', color: 'dark_aqua' },
-    { text: String(dimension), color: 'white' },
-    { text: '  Ping: ', color: 'gray' },
-    { text: String(ping), color: 'white' }
-  ])
+  return nearestBed
 }
 
 function executeCommand(bot, action, args, context) {
@@ -182,6 +140,7 @@ function executeCommand(bot, action, args, context) {
   switch (action) {
     case 'move':
     case 'forward':
+      bot.chat('Moving forward')
       bot.setControlState('back', false)
       bot.setControlState('left', false)
       bot.setControlState('right', false)
@@ -189,6 +148,7 @@ function executeCommand(bot, action, args, context) {
       bot.state.moving = true
       break
     case 'stop':
+      bot.chat('Stopping')
       bot.state.following = false
       bot.state.guarding = false
       bot.state.spinning = false
@@ -199,6 +159,7 @@ function executeCommand(bot, action, args, context) {
       bot.state.moving = false
       break
     case 'back':
+      bot.chat('Moving backward')
       bot.setControlState('forward', false)
       bot.setControlState('left', false)
       bot.setControlState('right', false)
@@ -206,6 +167,7 @@ function executeCommand(bot, action, args, context) {
       bot.state.moving = true
       break
     case 'left':
+      bot.chat('Moving left')
       bot.setControlState('forward', false)
       bot.setControlState('back', false)
       bot.setControlState('right', false)
@@ -213,6 +175,7 @@ function executeCommand(bot, action, args, context) {
       bot.state.moving = true
       break
     case 'right':
+      bot.chat('Moving right')
       bot.setControlState('forward', false)
       bot.setControlState('back', false)
       bot.setControlState('left', false)
@@ -228,11 +191,8 @@ function executeCommand(bot, action, args, context) {
       break
 
     case 'jump':
-      bot.jump()
-      break
-    case 'doublejump':
-      bot.jump()
-      setTimeout(() => bot.jump(), 100)
+      bot.setControlState('jump', true)
+      bot.chat('Jumping')
       break
 
     case 'sprint':
@@ -348,18 +308,99 @@ function executeCommand(bot, action, args, context) {
       break
     }
     case 'dig':
+    case 'mine':
       startDigLoop(bot)
       bot.chat('<mineflayer> Continuous dig enabled')
       break
     case 'activateitem':
       bot.activate()
       break
-
-    case 'drop':
-      if (bot.inventory.cursor()) {
-        bot.tossStack(bot.inventory.cursor())
+    case 'sleep': {
+      if (bot.isSleeping) {
+        bot.chat('<mineflayer> Already sleeping')
+        break
       }
+
+      const bed = findNearestBed(bot, 15, 3)
+      if (!bed) {
+        bot.chat('<mineflayer> No bed found within 15 blocks (and 3 blocks vertically)')
+        break
+      }
+
+      void (async () => {
+        try {
+          await bot.sleep(bed)
+          bot.chat('<mineflayer> Sleeping now')
+        } catch {
+          bot.chat('<mineflayer> Failed to sleep in nearby bed')
+        }
+      })()
       break
+    }
+    case 'eat': {
+      if (typeof bot.food === 'number' && bot.food >= 20) {
+        bot.chat('<mineflayer> Hunger already full')
+        break
+      }
+
+      void (async () => {
+        const canConsume = typeof bot.consume === 'function'
+        const canActivateItem = typeof bot.activateItem === 'function'
+
+        if (!canConsume && !canActivateItem) {
+          bot.chat('<mineflayer> Eating is not supported by this bot version')
+          return
+        }
+
+        let ateCount = 0
+        for (let i = 0; i < 32; i++) {
+          if (typeof bot.food === 'number' && bot.food >= 20) break
+
+          const edible = findFirstEdibleItem(bot)
+          if (!edible) break
+
+          try {
+            await bot.equip(edible, 'hand')
+
+            if (canConsume) {
+              await bot.consume()
+            } else {
+              bot.activateItem()
+              await new Promise(resolve => setTimeout(resolve, 1300))
+              if (typeof bot.deactivateItem === 'function') bot.deactivateItem()
+            }
+
+            ateCount++
+          } catch {
+            break
+          }
+        }
+
+        if (ateCount === 0) {
+          bot.chat('<mineflayer> No edible item found in inventory')
+        } else if (typeof bot.food === 'number' && bot.food >= 20) {
+          bot.chat(`<mineflayer> Done eating (${ateCount} item${ateCount === 1 ? '' : 's'}) - hunger full`)
+        } else {
+          bot.chat(`<mineflayer> Done eating (${ateCount} item${ateCount === 1 ? '' : 's'}) - no more food`)
+        }
+      })()
+      break
+    }
+
+    case 'drop': {
+      const cursorStack = typeof bot.inventory.cursor === 'function' ? bot.inventory.cursor() : null
+      const stackToDrop = cursorStack || bot.heldItem || bot.inventory.items()[0]
+
+      if (!stackToDrop) {
+        bot.chat('<mineflayer> No item to drop')
+        break
+      }
+
+      void bot.tossStack(stackToDrop).catch(() => {
+        bot.chat('<mineflayer> Drop failed')
+      })
+      break
+    }
     case 'dropall':
     case 'dropallitems': {
       const stacks = bot.inventory.items()
@@ -382,8 +423,8 @@ function executeCommand(bot, action, args, context) {
     }
     case 'equip':
       if (args[0]) {
-        const itemName = args[0]
-        const item = bot.inventory.items().find(i => i.name === itemName)
+        const itemNameQuery = args.join(' ').toLowerCase()
+        const item = bot.inventory.items().find(i => i.name.toLowerCase().includes(itemNameQuery))
         if (item) {
           bot.equip(item, 'hand')
         }
@@ -392,7 +433,7 @@ function executeCommand(bot, action, args, context) {
 
     case 'follow':
       bot.state.following = true
-      bot.chat('Following player')
+      bot.chat('Following you')
       break
     case 'stopfollow':
       bot.state.following = false
@@ -445,6 +486,10 @@ function executeCommand(bot, action, args, context) {
     case 'report':
       sendBotReport(bot)
       break
+    case 'inventory':
+    case 'inv':
+      sendBotReport(bot, { inventoryOnly: true })
+      break
     case 'health':
       bot.chat(`Health: ${bot.health}/${bot.maxHealth}`)
       break
@@ -475,6 +520,17 @@ function initializePhysicsTick(bot, context) {
   bot.on('physicsTick', () => {
     const currentBotNames = getCurrentBotNames()
     const isLookLocked = Boolean(bot.state.lookLocked)
+    const hungerAlertThreshold = bot.state.hungerAlertThreshold ?? 8
+
+    if (typeof bot.food === 'number') {
+      const isLowHunger = bot.food < hungerAlertThreshold
+      if (isLowHunger && !bot.state.hungerAlertSent) {
+        bot.chat(`<mineflayer> Hunger low: ${bot.food}/20`)
+        bot.state.hungerAlertSent = true
+      } else if (!isLowHunger && bot.state.hungerAlertSent) {
+        bot.state.hungerAlertSent = false
+      }
+    }
 
     if (isLookLocked) {
       bot.look(bot.state.lockYaw || 0, bot.state.lockPitch || 0, true)

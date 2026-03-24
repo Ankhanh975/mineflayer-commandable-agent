@@ -67,6 +67,9 @@ function handleChatCommand(bot, botNames = []) {
 
       if (targetBot.toLowerCase() !== bot.username.toLowerCase()) continue
 
+      bot.state = bot.state || {}
+      bot.state.lastCommandSender = username
+
       executeCommand(bot, action, args.slice(2), botNames)
     }
   })

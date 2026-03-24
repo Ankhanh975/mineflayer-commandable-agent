@@ -33,6 +33,8 @@ function createCommandBot(name, botNames = []) {
     following: false,
     guarding: false,
     spinning: false,
+    hungerAlertThreshold: 8,
+    hungerAlertSent: false,
     startedAt: Date.now()
   }
 
