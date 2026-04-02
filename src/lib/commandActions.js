@@ -4,10 +4,155 @@ const {
   lookAtWherePlayerLooks,
   getClosestNonBotPlayerEntity
 } = require('./commandHelpers')
+const { goals: { GoalFollow } } = require('mineflayer-pathfinder')
 const { stopAttackLoop, startAttackLoop } = require('./attackLoop')
 const { stopDigLoop, startDigLoop } = require('./digLoop')
 const { executeFarmAction } = require('./farmActions')
 const { sendBotReport } = require('./sendBotReport')
+
+const HOSTILE_MOB_NAMES = new Set([
+  'zombie',
+  'zombie_villager',
+  'husk',
+  'drowned',
+  'skeleton',
+  'stray',
+  'wither_skeleton',
+  'spider',
+  'cave_spider',
+  'creeper',
+  'enderman',
+  'witch',
+  'pillager',
+  'vindicator',
+  'evoker',
+  'ravager',
+  'phantom',
+  'slime',
+  'magma_cube',
+  'hoglin',
+  'zoglin',
+  'warden'
+])
+
+function isHostileMobEntity(entity) {
+  if (!entity || !entity.position) return false
+  const mobName = String(entity.name || '').toLowerCase()
+  if (!mobName) return false
+  return HOSTILE_MOB_NAMES.has(mobName)
+}
+
+function getNearestHostileMob(bot, maxDistance = 8, maxYDelta = 3) {
+  const botPos = bot.entity?.position
+  if (!botPos) return null
+
+  let nearest = null
+  let nearestDistance = Infinity
+
+  for (const entity of Object.values(bot.entities || {})) {
+    if (!isHostileMobEntity(entity)) continue
+    if (Math.abs(entity.position.y - botPos.y) > maxYDelta) continue
+
+    const distance = botPos.distanceTo(entity.position)
+    if (distance > maxDistance) continue
+    if (distance < nearestDistance) {
+      nearest = entity
+      nearestDistance = distance
+    }
+  }
+
+  return nearest ? { entity: nearest, distance: nearestDistance } : null
+}
+
+function isMobApproaching(bot, mob, currentDistance) {
+  if (!mob) return false
+  if (!bot.state.mobDistanceByEntityId) {
+    bot.state.mobDistanceByEntityId = new Map()
+  }
+
+  const previousDistance = bot.state.mobDistanceByEntityId.get(mob.id)
+  bot.state.mobDistanceByEntityId.set(mob.id, currentDistance)
+
+  const velocity = mob.velocity
+  const mobPos = mob.position
+  const botPos = bot.entity?.position
+  let movingTowardBot = false
+
+  if (velocity && mobPos && botPos) {
+    const toBot = botPos.minus(mobPos)
+    const towardDot = toBot.x * velocity.x + toBot.y * velocity.y + toBot.z * velocity.z
+    movingTowardBot = towardDot > 0.01
+  }
+
+  const distanceShrinking = typeof previousDistance === 'number' && previousDistance - currentDistance > 0.03
+  return movingTowardBot || distanceShrinking
+}
+
+function updateMobBackaway(bot) {
+  const now = Date.now()
+  const threat = getNearestHostileMob(bot, 8, 3)
+
+  let shouldBackaway = false
+  let nearestDistance = Infinity
+
+  if (threat) {
+    nearestDistance = threat.distance
+    const approaching = isMobApproaching(bot, threat.entity, threat.distance)
+    shouldBackaway = threat.distance <= 3.2 || (approaching && threat.distance <= 6)
+  }
+
+  if (!threat && bot.state.mobDistanceByEntityId?.size) {
+    bot.state.mobDistanceByEntityId.clear()
+  }
+
+  if (shouldBackaway) {
+    const threatName = String(threat?.entity?.name || 'mob')
+    const roundedDistance = Number(nearestDistance).toFixed(1)
+    const shouldAnnounce = !bot.state.mobEncounterActive || threatName !== bot.state.lastMobThreatName || now - (bot.state.lastMobEncounterChatAt || 0) > 5000
+    if (shouldAnnounce) {
+      bot.chat(`Uh oh, ${threatName} is close (${roundedDistance} blocks). Backing up!`)
+      bot.state.lastMobEncounterChatAt = now
+      bot.state.lastMobThreatName = threatName
+    }
+
+    // Face the threat first, then step backward.
+    if (threat?.entity?.position) {
+      void bot.lookAt(threat.entity.position.offset(0, threat.entity.height || 1.2, 0), true).catch(() => {})
+    }
+
+    if (bot.pathfinder) bot.pathfinder.setGoal(null)
+    bot.setControlState('forward', false)
+    bot.setControlState('left', false)
+    bot.setControlState('right', false)
+    bot.setControlState('back', true)
+    bot.setControlState('sprint', nearestDistance > 2)
+    bot.state.evadeUntil = now + 250
+    bot.state.evadingMobs = true
+    bot.state.mobEncounterActive = true
+    return true
+  }
+
+  const isEvading = Boolean(bot.state.evadingMobs && now < (bot.state.evadeUntil || 0))
+  if (isEvading) {
+    bot.setControlState('back', true)
+    return true
+  }
+
+  if (bot.state.evadingMobs) {
+    bot.setControlState('back', false)
+    bot.setControlState('sprint', false)
+    bot.state.evadingMobs = false
+  }
+
+  if (bot.state.mobEncounterActive) {
+    bot.chat('All clear now, stopping retreat.')
+    bot.state.mobEncounterActive = false
+    bot.state.lastMobThreatName = null
+    bot.state.lastMobEncounterChatAt = now
+  }
+
+  return false
+}
 
 function isEdibleItem(bot, item) {
   if (!item) return false
@@ -59,7 +204,7 @@ function executeCommand(bot, action, args, context) {
   switch (action) {
     case 'move':
     case 'forward':
-      bot.chat('Moving forward')
+      bot.chat('Heading forward.')
       bot.setControlState('back', false)
       bot.setControlState('left', false)
       bot.setControlState('right', false)
@@ -67,18 +212,24 @@ function executeCommand(bot, action, args, context) {
       bot.state.moving = true
       break
     case 'stop':
-      bot.chat('Stopping')
+      bot.chat('Okay, stopping.')
       bot.state.following = false
+      bot.state.followTargetId = null
+      bot.state.followReloadRequested = false
+      bot.state.followTargetMissingSince = null
+      bot.state.looking = false
       bot.state.guarding = false
       bot.state.spinning = false
       stopAttackLoop(bot)
       stopDigLoop(bot)
+      if (bot.pathfinder) bot.pathfinder.setGoal(null)
       bot.clearControlStates()
       bot.setControlState('jump', false)
+      bot.setControlState('sprint', false)
       bot.state.moving = false
       break
     case 'back':
-      bot.chat('Moving backward')
+      bot.chat('Backing up.')
       bot.setControlState('forward', false)
       bot.setControlState('left', false)
       bot.setControlState('right', false)
@@ -86,7 +237,7 @@ function executeCommand(bot, action, args, context) {
       bot.state.moving = true
       break
     case 'left':
-      bot.chat('Moving left')
+      bot.chat('Moving left.')
       bot.setControlState('forward', false)
       bot.setControlState('back', false)
       bot.setControlState('right', false)
@@ -94,7 +245,7 @@ function executeCommand(bot, action, args, context) {
       bot.state.moving = true
       break
     case 'right':
-      bot.chat('Moving right')
+      bot.chat('Moving right.')
       bot.setControlState('forward', false)
       bot.setControlState('back', false)
       bot.setControlState('left', false)
@@ -111,7 +262,7 @@ function executeCommand(bot, action, args, context) {
 
     case 'jump':
       bot.setControlState('jump', true)
-      bot.chat('Jumping')
+      bot.chat('Jumping!')
       break
 
     case 'sprint':
@@ -144,10 +295,10 @@ function executeCommand(bot, action, args, context) {
         bot.lookAt(new Vec3(x, y, z), true)
       } else if (args[0] === 'player') {
         bot.state.looking = true
-        bot.chat('Looking at player')
+        bot.chat('Got it, I will keep watching the player.')
       } else {
         bot.state.looking = !bot.state.looking
-        bot.chat(`Auto-look ${bot.state.looking ? 'enabled' : 'disabled'}`)
+        bot.chat(`Auto-look is now ${bot.state.looking ? 'on' : 'off'}.`)
       }
       break
     case 'lookat':
@@ -166,7 +317,7 @@ function executeCommand(bot, action, args, context) {
         break
       }
 
-      bot.chat('<mineflayer> Usage: lookat [x y z|north|south|east|west|up|down]')
+      bot.chat('Usage: lookat [x y z|north|south|east|west|up|down]')
       break
     case 'north':
     case 'south':
@@ -186,16 +337,16 @@ function executeCommand(bot, action, args, context) {
       bot.state.lookLocked = true
       bot.state.lockYaw = bot.entity.yaw
       bot.state.lockPitch = bot.entity.pitch
-      bot.chat('<mineflayer> Look direction locked')
+      bot.chat('Locked my look direction.')
       break
     case 'unlocklook':
       bot.state.lookLocked = false
-      bot.chat('<mineflayer> Look direction unlocked')
+      bot.chat('Unlocked my look direction.')
       break
 
     case 'attack':
       startAttackLoop(bot, getManager, 5)
-      bot.chat('Started attacking')
+      bot.chat('On it, attacking now.')
       break
     case 'attacknearest': {
       const entities = Object.values(bot.entities)
@@ -217,21 +368,30 @@ function executeCommand(bot, action, args, context) {
     case 'place': {
       const referenceBlock = bot.blockAtCursor(5)
       if (!referenceBlock) {
-        bot.chat('<mineflayer> Cannot place: no target block in sight')
+        bot.chat("I can't place that right now, no target block in sight.")
         break
       }
 
       bot.placeBlock(referenceBlock, new Vec3(0, 1, 0)).catch(() => {
-        bot.chat('<mineflayer> Place failed')
+        bot.chat("I couldn't place that block.")
       })
       break
     }
     case 'dig':
     case 'mine':
       startDigLoop(bot)
-      bot.chat('Started digging')
+      bot.chat('Starting to dig.')
       break
     case 'farm': {
+      // Farming is a focused task; disable follow/look automation first.
+      bot.state.following = false
+      bot.state.followTargetId = null
+      bot.state.followReloadRequested = false
+      bot.state.followTargetMissingSince = null
+      bot.state.looking = false
+      if (bot.pathfinder) bot.pathfinder.setGoal(null)
+      bot.setControlState('jump', false)
+      bot.setControlState('sprint', false)
       void executeFarmAction(bot)
       break
     }
@@ -240,29 +400,40 @@ function executeCommand(bot, action, args, context) {
       break
     case 'sleep': {
       if (bot.isSleeping) {
-        bot.chat('<mineflayer> Already sleeping')
+        bot.chat('I am already sleeping.')
         break
       }
 
       const bed = findNearestBed(bot, 15, 3)
       if (!bed) {
-        bot.chat('<mineflayer> No bed found within 15 blocks (and 3 blocks vertically)')
+        bot.chat("I can't find a bed within 15 blocks nearby.")
         break
       }
 
       void (async () => {
         try {
           await bot.sleep(bed)
-          bot.chat('<mineflayer> Sleeping now')
-        } catch {
-          bot.chat('<mineflayer> Failed to sleep in nearby bed')
+          bot.chat('Going to sleep now.')
+        } catch (err) {
+          console.error('Failed to sleep in nearby bed:', err)
+          if (err && err.message && (err.message.includes("not night") || err.message.includes("not a thunderstorm"))) {
+            try {
+              await bot.activateBlock(bed)
+              bot.chat('Spawn point set.')
+            } catch (err2) {
+              console.error('Failed to activate bed ffor spawn:', err2)
+              bot.chat(`I could not set spawn: ${err2 && err2.message ? err2.message : err2}`)
+            }
+          } else {
+            bot.chat(`I could not sleep in that bed: ${err && err.message ? err.message : err}`)
+          }
         }
       })()
       break
     }
     case 'eat': {
       if (typeof bot.food === 'number' && bot.food >= 20) {
-        bot.chat('<mineflayer> Hunger already full')
+        bot.chat('I am full already.')
         break
       }
 
@@ -271,7 +442,7 @@ function executeCommand(bot, action, args, context) {
         const canActivateItem = typeof bot.activateItem === 'function'
 
         if (!canConsume && !canActivateItem) {
-          bot.chat('<mineflayer> Eating is not supported by this bot version')
+          bot.chat('Eating is not supported on this bot version.')
           return
         }
 
@@ -300,11 +471,11 @@ function executeCommand(bot, action, args, context) {
         }
 
         if (ateCount === 0) {
-          bot.chat('<mineflayer> No edible item found in inventory')
+          bot.chat('I could not find food in my inventory.')
         } else if (typeof bot.food === 'number' && bot.food >= 20) {
-          bot.chat(`<mineflayer> Done eating (${ateCount} item${ateCount === 1 ? '' : 's'}) - hunger full`)
+          bot.chat(`Done eating (${ateCount} item${ateCount === 1 ? '' : 's'}). I am full now.`)
         } else {
-          bot.chat(`<mineflayer> Done eating (${ateCount} item${ateCount === 1 ? '' : 's'}) - no more food`)
+          bot.chat(`I ate ${ateCount} item${ateCount === 1 ? '' : 's'}, but I am out of food now.`)
         }
       })()
       break
@@ -315,12 +486,12 @@ function executeCommand(bot, action, args, context) {
       const stackToDrop = cursorStack || bot.heldItem || bot.inventory.items()[0]
 
       if (!stackToDrop) {
-        bot.chat('<mineflayer> No item to drop')
+        bot.chat('I have nothing to drop.')
         break
       }
 
       void bot.tossStack(stackToDrop).catch(() => {
-        bot.chat('<mineflayer> Drop failed')
+        bot.chat('I could not drop that item.')
       })
       break
     }
@@ -328,7 +499,7 @@ function executeCommand(bot, action, args, context) {
     case 'dropallitems': {
       const stacks = bot.inventory.items()
       if (stacks.length === 0) {
-        bot.chat('<mineflayer> No items to drop')
+        bot.chat('I have nothing to drop.')
         break
       }
 
@@ -336,11 +507,12 @@ function executeCommand(bot, action, args, context) {
         for (const stack of stacks) {
           try {
             await bot.tossStack(stack)
+            await new Promise(resolve => setTimeout(resolve, 200)) // 350ms cooldown between drops
           } catch {
             // Continue dropping remaining items.
           }
         }
-        bot.chat('<mineflayer> Dropped all inventory items')
+        bot.chat('Done, I dropped everything I was carrying.')
       })()
       break
     }
@@ -355,22 +527,33 @@ function executeCommand(bot, action, args, context) {
       break
 
     case 'follow':
+      if (bot.pathfinder && bot.state.following) {
+        // Reset active goal so repeated follow commands re-acquire the target cleanly.
+        bot.pathfinder.setGoal(null)
+      }
       bot.state.following = true
-      bot.chat('Following you')
+      bot.state.followReloadRequested = true
+      bot.state.followTargetId = null
+      bot.state.followTargetMissingSince = null
+      bot.chat('On your tail.')
       break
     case 'stopfollow':
       bot.state.following = false
-      bot.setControlState('forward', false)
+      bot.state.followTargetId = null
+      bot.state.followReloadRequested = false
+      bot.state.followTargetMissingSince = null
+      if (bot.pathfinder) bot.pathfinder.setGoal(null)
       bot.setControlState('jump', false)
-      bot.chat('Stopped following')
+      bot.setControlState('sprint', false)
+      bot.chat('Okay, I will stop following you.')
       break
     case 'guard':
       bot.state.guarding = true
-      bot.chat('Guard mode activated')
+      bot.chat('Guard mode is on.')
       break
     case 'stopguard':
       bot.state.guarding = false
-      bot.chat('Guard mode deactivated')
+      bot.chat('Guard mode is off.')
       break
 
     case 'spin': {
@@ -414,7 +597,7 @@ function executeCommand(bot, action, args, context) {
       sendBotReport(bot, { inventoryOnly: true })
       break
     case 'health':
-      bot.chat(`Health: ${bot.health}/${bot.maxHealth}`)
+      bot.chat(`I am at ${bot.health}/${bot.maxHealth} health.`)
       break
 
     case 'chat': {
@@ -433,7 +616,7 @@ function executeCommand(bot, action, args, context) {
     }
 
     default:
-      bot.chat(`Unknown command: ${action}`)
+      bot.chat(`I do not recognize that command: ${action}`)
   }
 }
 
@@ -448,7 +631,7 @@ function initializePhysicsTick(bot, context) {
     if (typeof bot.food === 'number') {
       const isLowHunger = bot.food < hungerAlertThreshold
       if (isLowHunger && !bot.state.hungerAlertSent) {
-        bot.chat(`<mineflayer> Hunger low: ${bot.food}/20`)
+        bot.chat(`I am getting hungry (${bot.food}/20).`)
         bot.state.hungerAlertSent = true
       } else if (!isLowHunger && bot.state.hungerAlertSent) {
         bot.state.hungerAlertSent = false
@@ -468,34 +651,57 @@ function initializePhysicsTick(bot, context) {
       }
     }
 
+    if (updateMobBackaway(bot)) {
+      return
+    }
+
     if (bot.state.following) {
       const targetPlayerEntity = getClosestNonBotPlayerEntity(bot, currentBotNames)
 
       if (targetPlayerEntity) {
         const distance = bot.entity.position.distanceTo(targetPlayerEntity.position)
+        bot.state.followTargetMissingSince = null
 
-        if (!isLookLocked) {
+        // Sprint only when the bot is far from the follow target.
+        if (bot.pathfinder?.movements) {
+          bot.pathfinder.movements.allowSprinting = distance > 10
+        }
+
+        // Let pathfinder control facing while moving; only force look when already near.
+        if (!isLookLocked && distance <= 4) {
           bot.lookAt(targetPlayerEntity.position.offset(0, targetPlayerEntity.height || 1.6, 0), true)
         }
 
-        if (distance > 3) {
-          bot.setControlState('forward', true)
-          bot.setControlState('jump', true)
-          bot.setControlState('sprint', distance > 8)
-        } else {
-          bot.setControlState('forward', false)
+        if (bot.pathfinder) {
+          const targetId = targetPlayerEntity.id
+          const shouldReloadGoal = Boolean(bot.state.followReloadRequested)
+          if (bot.state.followTargetId !== targetId || shouldReloadGoal) {
+            bot.pathfinder.setGoal(new GoalFollow(targetPlayerEntity, 3), true)
+            bot.state.followTargetId = targetId
+            bot.state.followReloadRequested = false
+          }
+        }
+      } else {
+        if (bot.pathfinder?.movements) {
+          bot.pathfinder.movements.allowSprinting = false
+        }
+
+        if (!bot.state.followTargetMissingSince) {
+          bot.state.followTargetMissingSince = Date.now()
+        }
+
+        // Avoid abrupt stop/start jitter when the target briefly unloads.
+        if (Date.now() - bot.state.followTargetMissingSince > 1000) {
+          if (bot.pathfinder) bot.pathfinder.setGoal(null)
+          bot.state.followTargetId = null
           bot.setControlState('jump', false)
           bot.setControlState('sprint', false)
         }
-      } else {
-        bot.setControlState('forward', false)
-        bot.setControlState('jump', false)
-        bot.setControlState('sprint', false)
       }
     }
 
     if (bot.state.guarding) {
-      bot.setControlState('forward', false)
+      if (bot.pathfinder) bot.pathfinder.setGoal(null)
       bot.setControlState('back', false)
       bot.setControlState('left', false)
       bot.setControlState('right', false)

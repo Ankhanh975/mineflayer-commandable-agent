@@ -1,4 +1,6 @@
 const mineflayer = require('mineflayer')
+const { pathfinder, Movements } = require('mineflayer-pathfinder')
+const mcDataLoader = require('minecraft-data')
 const { handleChatCommand, initializePhysicsTick } = require('./lib/commands')
 
 function botStatusChat(bot, message) {
@@ -19,7 +21,8 @@ function createCommandBot(name, botNames = []) {
   const bot = mineflayer.createBot({
     username: name,
     auth: 'offline',
-    respawn: false
+    respawn: false,
+    viewDistance: 3 // in chunks; adjust as needed
   })
 
   let respawnTimer = null
@@ -40,12 +43,24 @@ function createCommandBot(name, botNames = []) {
 
   // Event handlers
   bot.on('spawn', () => {
+    // Configure pathfinding movement rules once world data is available.
+    try {
+      const mcData = mcDataLoader(bot.version)
+      const defaultMovements = new Movements(bot, mcData)
+      defaultMovements.allowSprinting = false
+      bot.pathfinder.setMovements(defaultMovements)
+    } catch {
+      // Ignore movement setup failures; chat controls still work.
+    }
+
     if (respawnTimer) {
       clearTimeout(respawnTimer)
       respawnTimer = null
     }
     botStatusChat(bot, `${bot.username} spawned`)
   })
+
+  bot.loadPlugin(pathfinder)
 
   bot.on('death', () => {
     if (respawnTimer) clearTimeout(respawnTimer)

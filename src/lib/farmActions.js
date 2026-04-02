@@ -1,4 +1,5 @@
 const { Vec3 } = require('vec3')
+const { goals: { GoalNear } } = require('mineflayer-pathfinder')
 
 const HARVESTABLE_CROP_MAX_AGE = {
   wheat: 7,
@@ -114,45 +115,35 @@ function getInventoryItemCount(bot) {
 async function moveNearPosition(bot, targetPos, reachDistance = 2, timeoutMs = 6000) {
   if (!bot?.entity?.position || !targetPos) return false
 
-  const startedAt = Date.now()
+  if (!bot.pathfinder) return false
+
   const moveTarget = targetPos.clone ? targetPos.clone() : targetPos
+  const goal = new GoalNear(moveTarget.x, moveTarget.y, moveTarget.z, Math.max(1, reachDistance))
 
-  while (Date.now() - startedAt < timeoutMs) {
-    const currentDistance = bot.entity.position.distanceTo(moveTarget)
-    if (currentDistance <= reachDistance) {
-      bot.setControlState('forward', false)
-      bot.setControlState('sprint', false)
-      bot.setControlState('jump', false)
-      return true
-    }
+  let timeoutHandle = null
+  try {
+    const reached = await Promise.race([
+      bot.pathfinder.goto(goal).then(() => true).catch(() => false),
+      new Promise(resolve => {
+        timeoutHandle = setTimeout(() => resolve(false), timeoutMs)
+      })
+    ])
 
-    try {
-      await bot.lookAt(moveTarget, true)
-    } catch {
-      // Ignore transient look failures while moving.
-    }
-
-    bot.setControlState('forward', true)
-    bot.setControlState('sprint', currentDistance > 8)
-    bot.setControlState('jump', moveTarget.y > bot.entity.position.y + 0.8)
-
-    await wait(100)
+    if (!reached) bot.pathfinder.setGoal(null)
+    return reached
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle)
   }
-
-  bot.setControlState('forward', false)
-  bot.setControlState('sprint', false)
-  bot.setControlState('jump', false)
-  return false
 }
 
-async function moveNearBlockForDig(bot, block, breakDistance = 4.5, timeoutMs = 6000) {
+async function moveNearBlockForDig(bot, block, breakDistance = 3, timeoutMs = 6000) {
   if (!block?.position) return false
   return moveNearPosition(bot, block.position.offset(0.5, 0.5, 0.5), breakDistance, timeoutMs)
 }
 
 function isDroppedItemEntity(entity) {
-  if (!entity || entity.type !== 'object' || !entity.position) return false
-  if (entity.objectType === 'Item') return true
+  if (!entity || !entity.position) return false
+  // if (entity.objectType === 'Item') return true
   if (entity.name === 'item') return true
   if (entity.displayName === 'Item') return true
   return false
@@ -194,16 +185,29 @@ async function collectDroppedItems(bot, maxPasses = 32) {
     }
 
     idlePasses = 0
+    const targetEntityId = targetDrop.id
     const beforeCount = getInventoryItemCount(bot)
-    await moveNearPosition(bot, targetDrop.position.offset(0, 0.1, 0), 1.25, 4500)
-    await wait(220)
+
+    // Re-check the entity position while approaching so we do not chase a stale location.
+    for (let attempt = 0; attempt < 1; attempt++) {
+      const liveDrop = bot.entities?.[targetEntityId] || targetDrop
+      if (!isDroppedItemEntity(liveDrop)) break
+
+      await moveNearPosition(bot, liveDrop.position.offset(0, -0.9, 0), 0.7, 1800)
+      await wait(140)
+
+      const distanceToDrop = bot.entity?.position?.distanceTo(liveDrop.position)
+      if (typeof distanceToDrop === 'number' && distanceToDrop <= 0.95) {
+        await wait(220)
+        break
+      }
+    }
+
     const afterCount = getInventoryItemCount(bot)
     if (afterCount > beforeCount) pickedItemCount += afterCount - beforeCount
   }
 
-  bot.setControlState('forward', false)
-  bot.setControlState('sprint', false)
-  bot.setControlState('jump', false)
+  if (bot.pathfinder) bot.pathfinder.setGoal(null)
   return pickedItemCount
 }
 
@@ -221,8 +225,8 @@ async function executeFarmAction(bot) {
     if (!targetCrop || !isHarvestableCrop(targetCrop)) continue
 
     const distanceToCrop = bot.entity.position.distanceTo(cropPos.offset(0.5, 0.5, 0.5))
-    if (distanceToCrop > 4.5) {
-      const movedInRange = await moveNearBlockForDig(bot, targetCrop, 4.5, 6000)
+    if (distanceToCrop > 3) {
+      const movedInRange = await moveNearBlockForDig(bot, targetCrop, 3, 6000)
       if (!movedInRange) continue
       targetCrop = bot.blockAt(cropPos)
       if (!targetCrop || !isHarvestableCrop(targetCrop)) continue
@@ -240,6 +244,8 @@ async function executeFarmAction(bot) {
     await wait(60)
   }
 
+  // Wait briefly so harvested drops spawn and become collectible.
+  await wait(320)
   pickedUp = await collectDroppedItems(bot)
 
   for (let i = 0; i < 64; i++) {
@@ -257,8 +263,8 @@ async function executeFarmAction(bot) {
     if (!isAirBlock(above)) continue
 
     const distanceToFarmland = bot.entity.position.distanceTo(farmlandPos.offset(0.5, 0.5, 0.5))
-    if (distanceToFarmland > 4.5) {
-      const movedInRange = await moveNearBlockForDig(bot, targetFarmland, 4.5, 6000)
+    if (distanceToFarmland > 3) {
+      const movedInRange = await moveNearBlockForDig(bot, targetFarmland, 3, 6000)
       if (!movedInRange) continue
 
       targetFarmland = bot.blockAt(farmlandPos)
@@ -278,10 +284,11 @@ async function executeFarmAction(bot) {
     await wait(60)
   }
 
+  await wait(100)
   if (harvested === 0 && pickedUp === 0 && planted === 0) {
-    bot.chat('<mineflayer> No harvestable crops or plantable farmland nearby')
+    bot.chat('I could not find ripe crops or open farmland nearby.')
   } else {
-    bot.chat(`<mineflayer> Farm done: harvested ${harvested}, picked ${pickedUp}, planted ${planted}`)
+    bot.chat(`Farm run done: harvested ${harvested}, picked up ${pickedUp}, planted ${planted}.`)
   }
 }
 
